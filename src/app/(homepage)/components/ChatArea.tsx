@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useCall } from "@/components/CallProvider";
+import IncomingCall from "@/components/IncomingCall";
+import VideoCall from "@/components/VideoCall";
 import { useSocket } from "@/components/SocketProvider";
 import {
   getMessages,
@@ -12,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Send, Smile, ImagePlus, X, Mic, Square, Trash2, FileText, Download } from "lucide-react";
+import { Send, Smile, ImagePlus, X, Mic, Square, Trash2, FileText, Download, Video } from "lucide-react";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import Image from "next/image";
@@ -27,6 +30,7 @@ interface Message {
   audioUrl?: string | null;
   documentUrl?: string | null;
   documentName?: string | null;
+  videoUrl?: string | null;
   createdAt: Date;
 }
 
@@ -59,6 +63,36 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   const socket = useSocket();
   const router = useRouter();
 
+  // WebRTC call state
+  const { callState, setCallState } = useCall();
+  // Accept/decline handlers
+  const handleAcceptCall = () => {
+    if (!callState.incoming) return;
+    const { from } = callState.incoming;
+    socket?.emit("accept-call", { to: from, from: currentUserId });
+    setCallState((s: any) => ({ ...s, incoming: null, active: { peerId: from, stream: null } }));
+  };
+  const handleDeclineCall = () => {
+    if (!callState.incoming) return;
+    const { from } = callState.incoming;
+    socket?.emit("decline-call", { to: from, from: currentUserId });
+    setCallState((s: any) => ({ ...s, incoming: null }));
+  };
+  const handleStartCall = () => {
+    if (!chatUser) return;
+    socket?.emit("call", {
+      to: chatUser.id,
+      from: currentUserId,
+      name: chatUser.name,
+      avatar: chatUser.image,
+    });
+    setCallState((s: any) => ({ ...s, outgoing: { to: chatUser.id, name: chatUser.name, avatar: chatUser.image } }));
+  };
+  const handleEndCall = () => {
+    setCallState((s: any) => ({ ...s, active: null, outgoing: null }));
+    // TODO: send cancel-call or end-call event
+  };
+
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -75,6 +109,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   const [showDocEmoji, setShowDocEmoji] = useState(false);
   const docEmojiRef = useRef<HTMLDivElement>(null);
   const docCaptionRef = useRef<HTMLInputElement>(null);
+
+  // Video state
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+  const [videoPreview, setVideoPreview] = useState<string | null>(null);
+  const [videoCaption, setVideoCaption] = useState("");
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [showVideoEmoji, setShowVideoEmoji] = useState(false);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const videoEmojiRef = useRef<HTMLDivElement>(null);
+  const videoCaptionRef = useRef<HTMLInputElement>(null);
 
   // Close emoji picker on outside click
   useEffect(() => {
@@ -93,6 +137,12 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
         !docEmojiRef.current.contains(e.target as Node)
       ) {
         setShowDocEmoji(false);
+      }
+      if (
+        videoEmojiRef.current &&
+        !videoEmojiRef.current.contains(e.target as Node)
+      ) {
+        setShowVideoEmoji(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -299,6 +349,89 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
+  // Video functions
+  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setVideoFile(file);
+    setVideoPreview(URL.createObjectURL(file));
+    setVideoCaption("");
+    setShowVideoPreview(true);
+    e.target.value = "";
+  };
+
+  const cancelVideoPreview = () => {
+    if (videoPreview) URL.revokeObjectURL(videoPreview);
+    setVideoFile(null);
+    setVideoPreview(null);
+    setVideoCaption("");
+    setShowVideoPreview(false);
+    setShowVideoEmoji(false);
+  };
+
+  const handleSendVideo = async () => {
+    if (!videoFile || sending) return;
+    setSending(true);
+    try {
+      // Get signed upload params from server
+      const signRes = await fetch("/api/upload-video");
+      if (!signRes.ok) throw new Error("Failed to get upload signature");
+      const { signature, timestamp, cloudName, apiKey } = await signRes.json();
+
+      // Upload directly to Cloudinary from the browser
+      const formData = new FormData();
+      formData.append("file", videoFile);
+      formData.append("signature", signature);
+      formData.append("timestamp", String(timestamp));
+      formData.append("api_key", apiKey);
+      formData.append("folder", "messenger/videos");
+
+      const uploadRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
+        { method: "POST", body: formData }
+      );
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        console.error("Cloudinary upload error:", errText);
+        throw new Error("Video upload failed");
+      }
+      const { secure_url: uploadedUrl } = await uploadRes.json();
+
+      const msg = await sendMessage(
+        chatId,
+        videoCaption || "",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        uploadedUrl
+      );
+
+      socket?.emit("send-message", {
+        receiverId: chatId,
+        message: msg,
+      });
+
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+      });
+
+      cancelVideoPreview();
+    } catch (err) {
+      console.error("Failed to send video:", err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleVideoKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSendVideo();
+    }
+  };
+
   // Voice recording functions
   const startRecording = async () => {
     try {
@@ -394,6 +527,18 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
   return (
     <div className="flex-1 flex flex-col h-full relative">
+      {/* Incoming Call Popup */}
+      {callState.incoming && (
+        <IncomingCall
+          incoming={callState.incoming}
+          onAccept={handleAcceptCall}
+          onDecline={handleDeclineCall}
+        />
+      )}
+      {/* Video Call UI */}
+      {callState.active && (
+        <VideoCall stream={callState.active.stream} onEnd={handleEndCall} />
+      )}
       {/* HEADER */}
       <div className="h-16 border-b border-zinc-800 flex items-center px-6 gap-3 shrink-0">
         <Avatar className="h-10 w-10">
@@ -404,6 +549,15 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           <div className="font-medium">{chatUser.name}</div>
           <div className="text-xs text-zinc-500">Chat</div>
         </div>
+        {/* Call Button */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-green-500 hover:text-green-700"
+          onClick={handleStartCall}
+        >
+          <Video className="h-5 w-5" />
+        </Button>
         <Button
           variant="ghost"
           size="icon"
@@ -456,6 +610,17 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                       src={msg.audioUrl}
                       className="h-8 max-w-55"
                       style={{ filter: "invert(1)" }}
+                    />
+                  </div>
+                )}
+                {/* Video */}
+                {msg.videoUrl && (
+                  <div className="relative w-64">
+                    <video
+                      src={msg.videoUrl}
+                      controls
+                      className="w-full rounded-t-sm"
+                      preload="metadata"
                     />
                   </div>
                 )}
@@ -590,6 +755,84 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
               <Button
                 onClick={handleSendImage}
+                disabled={sending}
+                size="icon"
+                className="rounded-full bg-blue-600 hover:bg-blue-700 shrink-0"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIDEO PREVIEW OVERLAY */}
+      {showVideoPreview && videoPreview && (
+        <div className="absolute inset-0 z-50 bg-zinc-950/95 flex flex-col">
+          {/* Preview Header */}
+          <div className="h-14 flex items-center px-4 shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={cancelVideoPreview}
+              className="text-zinc-400 hover:text-white"
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
+
+          {/* Preview Video */}
+          <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+            <video
+              src={videoPreview}
+              controls
+              className="max-h-[60vh] max-w-full rounded-lg"
+            />
+          </div>
+
+          {/* Preview Input Bar */}
+          <div className="p-4 shrink-0">
+            <div className="relative flex items-center gap-3">
+              {/* Emoji for video preview */}
+              <div ref={videoEmojiRef}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0 text-zinc-400 hover:text-zinc-100"
+                  onClick={() => setShowVideoEmoji((prev) => !prev)}
+                >
+                  <Smile className="h-5 w-5" />
+                </Button>
+
+                {showVideoEmoji && (
+                  <div className="absolute bottom-14 left-0 z-50">
+                    <Picker
+                      data={data}
+                      onEmojiSelect={(emoji: { native: string }) => {
+                        setVideoCaption((prev) => prev + emoji.native);
+                        videoCaptionRef.current?.focus();
+                      }}
+                      theme="dark"
+                      previewPosition="none"
+                      skinTonePosition="search"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <Input
+                ref={videoCaptionRef}
+                value={videoCaption}
+                onChange={(e) => setVideoCaption(e.target.value)}
+                onKeyDown={handleVideoKeyDown}
+                placeholder="Add a caption..."
+                className="flex-1 bg-zinc-800 border-zinc-700 rounded-full px-4 py-2"
+                disabled={sending}
+              />
+
+              <Button
+                onClick={handleSendVideo}
                 disabled={sending}
                 size="icon"
                 className="rounded-full bg-blue-600 hover:bg-blue-700 shrink-0"
@@ -813,6 +1056,24 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
             accept="image/*"
             className="hidden"
             onChange={handleImageSelect}
+          />
+
+          {/* Video Upload Button */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0 text-zinc-400 hover:text-zinc-100"
+            onClick={() => videoInputRef.current?.click()}
+          >
+            <Video className="h-5 w-5" />
+          </Button>
+          <input
+            ref={videoInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={handleVideoSelect}
           />
 
           {/* Document Upload Button */}

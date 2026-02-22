@@ -30,7 +30,8 @@ export async function sendMessage(
   imageUrl?: string,
   audioUrl?: string,
   documentUrl?: string,
-  documentName?: string
+  documentName?: string,
+  videoUrl?: string
 ) {
   const { userId } = await auth()
   if (!userId) throw new Error("Not authenticated")
@@ -45,6 +46,7 @@ export async function sendMessage(
       audioUrl: audioUrl ?? null,
       documentUrl: documentUrl ?? null,
       documentName: documentName ?? null,
+      videoUrl: videoUrl ?? null,
     })
     .returning()
 
@@ -95,6 +97,34 @@ export async function uploadAudio(formData: FormData): Promise<string> {
         {
           folder: "messenger/audio",
           resource_type: "video", // Cloudinary uses "video" for audio files
+        },
+        (error, result) => {
+          if (error || !result) reject(error ?? new Error("Upload failed"))
+          else resolve(result)
+        }
+      )
+      .end(buffer)
+  })
+
+  return result.secure_url
+}
+
+export async function uploadVideo(formData: FormData): Promise<string> {
+  const { userId } = await auth()
+  if (!userId) throw new Error("Not authenticated")
+
+  const file = formData.get("video") as File
+  if (!file) throw new Error("No file provided")
+
+  const bytes = await file.arrayBuffer()
+  const buffer = Buffer.from(bytes)
+
+  const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream(
+        {
+          folder: "messenger/videos",
+          resource_type: "video",
         },
         (error, result) => {
           if (error || !result) reject(error ?? new Error("Upload failed"))

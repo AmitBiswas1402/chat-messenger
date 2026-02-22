@@ -30,5 +30,6 @@ export const messages = pgTable("messages", {
   audioUrl: varchar("audio_url", { length: 1024 }),
   documentUrl: varchar("document_url", { length: 1024 }),
   documentName: varchar("document_name", { length: 512 }),
+  videoUrl: varchar("video_url", { length: 1024 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

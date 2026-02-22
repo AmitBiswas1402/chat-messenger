@@ -1,4 +1,5 @@
 import ChatArea from "../../components/ChatArea"
+import { CallProvider } from "@/components/CallProvider";
 import { users } from "@/db/schema"
 import { db } from "@/index"
 import { eq } from "drizzle-orm"
@@ -25,11 +26,22 @@ export default async function ChatPage({
     return <div>User not found</div>
   }
 
+  if (!currentUserId) {
+    return (
+      <ChatArea
+        chatId={id}
+        currentUserId={undefined}
+        chatUser={selectedUser}
+      />
+    );
+  }
   return (
-    <ChatArea
-      chatId={id}
-      currentUserId={currentUserId ?? undefined}
-      chatUser={selectedUser}
-    />
-  )
+    <CallProvider userId={currentUserId}>
+      <ChatArea
+        chatId={id}
+        currentUserId={currentUserId}
+        chatUser={selectedUser}
+      />
+    </CallProvider>
+  );
 }
