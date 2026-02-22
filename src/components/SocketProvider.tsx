@@ -24,8 +24,9 @@ export function SocketProvider({
     });
 
     s.on("connect", () => {
-      console.log("Socket connected:", s.id);
+      console.log("[SocketProvider] Socket connected:", s.id);
       s.emit("join", userId);
+      console.log("[SocketProvider] join emitted with userId:", userId);
     });
 
     setSocket(s);

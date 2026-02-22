@@ -1,9 +1,16 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
-import { useCall } from "@/components/CallProvider";
-import IncomingCall from "@/components/IncomingCall";
-import VideoCall from "@/components/VideoCall";
+import { StreamVideoClient, StreamVideoProvider, StreamCall, Call, CallControls, StreamTheme } from "@stream-io/video-react-sdk";
+// Helper to fetch Stream token
+async function fetchStreamToken(userId: string) {
+  const res = await fetch("/api/stream-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  if (!res.ok) throw new Error("Failed to fetch Stream token");
+  return res.json();
+}
 import { useSocket } from "@/components/SocketProvider";
 import {
   getMessages,
@@ -45,6 +52,121 @@ interface Props {
 }
 
 const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
+  // Custom call UI state
+  const [isCalling, setIsCalling] = useState(false); // true for caller while waiting for answer
+  const [isRinging, setIsRinging] = useState(false); // true for receiver when incoming call
+  const [ringtoneAudio, setRingtoneAudio] = useState<HTMLAudioElement | null>(null);
+    // Stream Video state
+    const [streamClient, setStreamClient] = useState<StreamVideoClient | null>(null);
+    const [call, setCall] = useState<Call | null>(null);
+    const [callActive, setCallActive] = useState(false);
+
+    // Fetch Stream token and initialize client
+    useEffect(() => {
+      if (!currentUserId || !chatUser) return;
+      let client: StreamVideoClient;
+      fetchStreamToken(currentUserId).then(({ token, apiKey }) => {
+        client = new StreamVideoClient({
+          apiKey,
+          user: { id: currentUserId, name: currentUserId },
+          token,
+        });
+        setStreamClient(client);
+      });
+      return () => {
+        if (client) client.disconnectUser?.();
+      };
+    }, [currentUserId, chatUser]);
+
+    // Helper to generate a short, deterministic call ID for a user pair
+    function getCallId(userA: string, userB: string) {
+      // Sort, join, and hash to 32 chars (SHA-256, hex, first 32 chars)
+      const raw = [userA, userB].sort().join(":");
+      // Simple hash (FNV-1a, 32-bit, hex) for brevity and determinism
+      let hash = 2166136261;
+      for (let i = 0; i < raw.length; i++) {
+        hash ^= raw.charCodeAt(i);
+        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+      }
+      return 'call_' + Math.abs(hash >>> 0).toString(16);
+    }
+
+  // Helper to request camera/mic permissions
+  const requestMediaPermissions = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      return true;
+    } catch (err) {
+      alert("Camera and microphone access is required for calls. Please allow permissions in your browser settings.");
+      return false;
+    }
+  };
+
+  // Start a call with chatUser
+  const handleStartCall = async () => {
+    if (!streamClient || !chatUser || !currentUserId) return;
+    const hasPerm = await requestMediaPermissions();
+    if (!hasPerm) return;
+    const callId = getCallId(currentUserId, chatUser.id);
+    const call = streamClient.call("default", callId);
+    setCall(call);
+    setCallActive(true);
+    setIsCalling(true);
+    await call.join({ create: true });
+  };
+
+  // End call handler
+  const handleEndCall = () => {
+    setCallActive(false);
+    setCall(null);
+    setIsCalling(false);
+    setIsRinging(false);
+    if (ringtoneAudio) {
+      ringtoneAudio.pause();
+      ringtoneAudio.currentTime = 0;
+    }
+  };
+
+  // Listen for Stream call state changes to show custom UI and play ringtone
+  useEffect(() => {
+    if (!call) return;
+    // Handler for call state
+    const handleStateChanged = (event: any) => {
+      // If I'm the caller and call is ringing, show 'Calling...'
+      if (call.state.callingState === "ringing" && call.state.localParticipant) {
+        setIsCalling(true);
+      } else if (call.state.callingState === "joined") {
+        setIsCalling(false);
+        setIsRinging(false);
+        if (ringtoneAudio) {
+          ringtoneAudio.pause();
+          ringtoneAudio.currentTime = 0;
+        }
+      }
+    };
+    // Handler for incoming call (receiver)
+    const handleRinging = () => {
+      setIsRinging(true);
+      // Play ringtone
+      if (!ringtoneAudio) {
+        const audio = new Audio("/ringtone.mp3");
+        audio.loop = true;
+        setRingtoneAudio(audio);
+        audio.play();
+      } else {
+        ringtoneAudio.currentTime = 0;
+        ringtoneAudio.play();
+      }
+    };
+    // Use correct event names as per Stream SDK types
+    call.on("call.state_changed" as any, handleStateChanged);
+    call.on("call.ring" as any, handleRinging);
+    return () => {
+      call.off("call.state_changed" as any, handleStateChanged);
+      call.off("call.ring" as any, handleRinging);
+    };
+    // eslint-disable-next-line
+  }, [call, ringtoneAudio]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -63,35 +185,6 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   const socket = useSocket();
   const router = useRouter();
 
-  // WebRTC call state
-  const { callState, setCallState } = useCall();
-  // Accept/decline handlers
-  const handleAcceptCall = () => {
-    if (!callState.incoming) return;
-    const { from } = callState.incoming;
-    socket?.emit("accept-call", { to: from, from: currentUserId });
-    setCallState((s: any) => ({ ...s, incoming: null, active: { peerId: from, stream: null } }));
-  };
-  const handleDeclineCall = () => {
-    if (!callState.incoming) return;
-    const { from } = callState.incoming;
-    socket?.emit("decline-call", { to: from, from: currentUserId });
-    setCallState((s: any) => ({ ...s, incoming: null }));
-  };
-  const handleStartCall = () => {
-    if (!chatUser) return;
-    socket?.emit("call", {
-      to: chatUser.id,
-      from: currentUserId,
-      name: chatUser.name,
-      avatar: chatUser.image,
-    });
-    setCallState((s: any) => ({ ...s, outgoing: { to: chatUser.id, name: chatUser.name, avatar: chatUser.image } }));
-  };
-  const handleEndCall = () => {
-    setCallState((s: any) => ({ ...s, active: null, outgoing: null }));
-    // TODO: send cancel-call or end-call event
-  };
 
   // Voice recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -527,20 +620,50 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
   return (
     <div className="flex-1 flex flex-col h-full relative">
-      {/* Incoming Call Popup */}
-      {callState.incoming && (
-        <IncomingCall
-          incoming={callState.incoming}
-          onAccept={handleAcceptCall}
-          onDecline={handleDeclineCall}
-        />
+      {/* Custom Calling Modal for Caller */}
+      {isCalling && !isRinging && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
+          <div className="bg-white rounded-lg p-8 shadow-lg flex flex-col items-center">
+            <div className="text-2xl font-semibold mb-4">Calling {chatUser?.name}...</div>
+            <Button onClick={handleEndCall} className="mt-2">Cancel</Button>
+          </div>
+        </div>
       )}
-      {/* Video Call UI */}
-      {callState.active && (
-        <VideoCall stream={callState.active.stream} onEnd={handleEndCall} />
+      {/* Custom Incoming Call Modal for Receiver */}
+      {isRinging && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
+          <div className="bg-white rounded-lg p-8 shadow-lg flex flex-col items-center">
+            <div className="text-2xl font-semibold mb-4">Incoming call from {chatUser?.name}</div>
+            <div className="flex gap-4">
+              <Button onClick={async () => {
+                setIsRinging(false);
+                if (ringtoneAudio) { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; }
+                if (call) {
+                  const hasPerm = await requestMediaPermissions();
+                  if (hasPerm) await call.join();
+                }
+              }} className="bg-green-500 hover:bg-green-600">Accept</Button>
+              <Button onClick={handleEndCall} className="bg-red-500 hover:bg-red-600">Reject</Button>
+            </div>
+          </div>
+        </div>
       )}
       {/* HEADER */}
       <div className="h-16 border-b border-zinc-800 flex items-center px-6 gap-3 shrink-0">
+        {/* Stream Video Call UI (modal) */}
+        {callActive && call && streamClient && (
+          <StreamTheme>
+            <StreamVideoProvider client={streamClient}>
+              <StreamCall call={call}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
+                  <div className="bg-white rounded-lg p-6 shadow-lg flex flex-col items-center">
+                    <CallControls onLeave={handleEndCall} />
+                  </div>
+                </div>
+              </StreamCall>
+            </StreamVideoProvider>
+          </StreamTheme>
+        )}
         <Avatar className="h-10 w-10">
           <AvatarImage src={chatUser.image ?? undefined} />
           <AvatarFallback>{chatUser.name?.charAt(0)}</AvatarFallback>
@@ -549,15 +672,17 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           <div className="font-medium">{chatUser.name}</div>
           <div className="text-xs text-zinc-500">Chat</div>
         </div>
-        {/* Call Button */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="text-green-500 hover:text-green-700"
-          onClick={handleStartCall}
-        >
-          <Video className="h-5 w-5" />
-        </Button>
+        {/* Stream Call Button (right side, before close) */}
+        {streamClient && chatUser && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-green-500 hover:text-green-700"
+            onClick={handleStartCall}
+          >
+            <Video className="h-5 w-5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
