@@ -1,16 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { StreamVideoClient, StreamVideoProvider, StreamCall, Call, CallControls, StreamTheme } from "@stream-io/video-react-sdk";
-// Helper to fetch Stream token
-async function fetchStreamToken(userId: string) {
-  const res = await fetch("/api/stream-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId }),
-  });
-  if (!res.ok) throw new Error("Failed to fetch Stream token");
-  return res.json();
-}
+
+
+
+
 import { useSocket } from "@/components/SocketProvider";
 import {
   getMessages,
@@ -19,6 +12,17 @@ import {
   uploadAudio,
   uploadDocument,
 } from "@/actions/message.action";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -27,6 +31,11 @@ import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+
+
+
+
 
 interface Message {
   id: string;
@@ -52,145 +61,42 @@ interface Props {
 }
 
 const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
-  // Custom call UI state
-  const [isCalling, setIsCalling] = useState(false); // true for caller while waiting for answer
-  const [isRinging, setIsRinging] = useState(false); // true for receiver when incoming call
-  const [ringtoneAudio, setRingtoneAudio] = useState<HTMLAudioElement | null>(null);
-    // Stream Video state
-    const [streamClient, setStreamClient] = useState<StreamVideoClient | null>(null);
-    const [call, setCall] = useState<Call | null>(null);
-    const [callActive, setCallActive] = useState(false);
-
-    // Fetch Stream token and initialize client
-    useEffect(() => {
-      if (!currentUserId || !chatUser) return;
-      let client: StreamVideoClient;
-      fetchStreamToken(currentUserId).then(({ token, apiKey }) => {
-        client = new StreamVideoClient({
-          apiKey,
-          user: { id: currentUserId, name: currentUserId },
-          token,
-        });
-        setStreamClient(client);
-      });
-      return () => {
-        if (client) client.disconnectUser?.();
-      };
-    }, [currentUserId, chatUser]);
-
-    // Helper to generate a short, deterministic call ID for a user pair
-    function getCallId(userA: string, userB: string) {
-      // Sort, join, and hash to 32 chars (SHA-256, hex, first 32 chars)
-      const raw = [userA, userB].sort().join(":");
-      // Simple hash (FNV-1a, 32-bit, hex) for brevity and determinism
-      let hash = 2166136261;
-      for (let i = 0; i < raw.length; i++) {
-        hash ^= raw.charCodeAt(i);
-        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-      }
-      return 'call_' + Math.abs(hash >>> 0).toString(16);
-    }
-
-  // Helper to request camera/mic permissions
-  const requestMediaPermissions = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      return true;
-    } catch (err) {
-      alert("Camera and microphone access is required for calls. Please allow permissions in your browser settings.");
-      return false;
-    }
-  };
-
-  // Start a call with chatUser
-  const handleStartCall = async () => {
-    if (!streamClient || !chatUser || !currentUserId) return;
-    const hasPerm = await requestMediaPermissions();
-    if (!hasPerm) return;
-    const callId = getCallId(currentUserId, chatUser.id);
-    const call = streamClient.call("default", callId);
-    setCall(call);
-    setCallActive(true);
-    setIsCalling(true);
-    await call.join({ create: true });
-  };
-
-  // End call handler
-  const handleEndCall = () => {
-    setCallActive(false);
-    setCall(null);
-    setIsCalling(false);
-    setIsRinging(false);
-    if (ringtoneAudio) {
-      ringtoneAudio.pause();
-      ringtoneAudio.currentTime = 0;
-    }
-  };
-
-  // Listen for Stream call state changes to show custom UI and play ringtone
-  useEffect(() => {
-    if (!call) return;
-    // Handler for call state
-    const handleStateChanged = (event: any) => {
-      // If I'm the caller and call is ringing, show 'Calling...'
-      if (call.state.callingState === "ringing" && call.state.localParticipant) {
-        setIsCalling(true);
-      } else if (call.state.callingState === "joined") {
-        setIsCalling(false);
-        setIsRinging(false);
-        if (ringtoneAudio) {
-          ringtoneAudio.pause();
-          ringtoneAudio.currentTime = 0;
-        }
-      }
-    };
-    // Handler for incoming call (receiver)
-    const handleRinging = () => {
-      setIsRinging(true);
-      // Play ringtone
-      if (!ringtoneAudio) {
-        const audio = new Audio("/ringtone.mp3");
-        audio.loop = true;
-        setRingtoneAudio(audio);
-        audio.play();
-      } else {
-        ringtoneAudio.currentTime = 0;
-        ringtoneAudio.play();
-      }
-    };
-    // Use correct event names as per Stream SDK types
-    call.on("call.state_changed" as any, handleStateChanged);
-    call.on("call.ring" as any, handleRinging);
-    return () => {
-      call.off("call.state_changed" as any, handleStateChanged);
-      call.off("call.ring" as any, handleRinging);
-    };
-    // eslint-disable-next-line
-  }, [call, ringtoneAudio]);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [showPreviewEmoji, setShowPreviewEmoji] = useState(false);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [caption, setCaption] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const emojiRef = useRef<HTMLDivElement>(null);
-  const previewEmojiRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const captionRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const docInputRef = useRef<HTMLInputElement>(null);
-  const socket = useSocket();
+  // Router
   const router = useRouter();
 
+  // Socket
+  const socket = useSocket();
 
-  // Voice recording state
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
+  // Messages state
+  const [messages, setMessages] = useState<Message[]>([]);
+
+  // Input state
+  const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Emoji picker state
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiRef = useRef<HTMLDivElement>(null);
+
+  // Image state
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [caption, setCaption] = useState("");
+  const [showPreviewEmoji, setShowPreviewEmoji] = useState(false);
+  const previewEmojiRef = useRef<HTMLDivElement>(null);
+  const captionRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sending state
+  const [sending, setSending] = useState(false);
+
+
+
+  // Audio/voice state
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -202,6 +108,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   const [showDocEmoji, setShowDocEmoji] = useState(false);
   const docEmojiRef = useRef<HTMLDivElement>(null);
   const docCaptionRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
 
   // Video state
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -212,6 +119,18 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   const videoInputRef = useRef<HTMLInputElement>(null);
   const videoEmojiRef = useRef<HTMLDivElement>(null);
   const videoCaptionRef = useRef<HTMLInputElement>(null);
+
+  // Scroll ref
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Edit dialog state
+  const [editMsgId, setEditMsgId] = useState<string | null>(null);
+  const [editMsgValue, setEditMsgValue] = useState<string>("");
+  const [editLoading, setEditLoading] = useState(false);
+
+  // Delete dialog state
+  const [deleteMsgId, setDeleteMsgId] = useState<string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Close emoji picker on outside click
   useEffect(() => {
@@ -618,52 +537,53 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
+  // Edit message submit handler
+  async function handleEditSubmit() {
+    if (!editMsgId || !editMsgValue.trim()) return;
+    setEditLoading(true);
+    try {
+      const res = await fetch("/api/message-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: editMsgId, newContent: editMsgValue.trim() })
+      });
+      if (!res.ok) throw new Error("Failed to edit message");
+      setMessages(prev => prev.map(m => m.id === editMsgId ? { ...m, content: editMsgValue.trim() } : m));
+      socket?.emit("edit-message", { id: editMsgId, content: editMsgValue.trim() });
+      setEditMsgId(null);
+    } catch (err) {
+      alert("Failed to edit message");
+    } finally {
+      setEditLoading(false);
+    }
+  }
+
+  // Delete message submit handler
+  async function handleDeleteSubmit() {
+    if (!deleteMsgId) return;
+    setDeleteLoading(true);
+    try {
+      const res = await fetch("/api/message-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: deleteMsgId })
+      });
+      if (!res.ok) throw new Error("Failed to delete message");
+      setMessages(prev => prev.filter(m => m.id !== deleteMsgId));
+      socket?.emit("delete-message", { id: deleteMsgId });
+      setDeleteMsgId(null);
+    } catch (err) {
+      alert("Failed to delete message");
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col h-full relative">
-      {/* Custom Calling Modal for Caller */}
-      {isCalling && !isRinging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
-          <div className="bg-white rounded-lg p-8 shadow-lg flex flex-col items-center">
-            <div className="text-2xl font-semibold mb-4">Calling {chatUser?.name}...</div>
-            <Button onClick={handleEndCall} className="mt-2">Cancel</Button>
-          </div>
-        </div>
-      )}
-      {/* Custom Incoming Call Modal for Receiver */}
-      {isRinging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
-          <div className="bg-white rounded-lg p-8 shadow-lg flex flex-col items-center">
-            <div className="text-2xl font-semibold mb-4">Incoming call from {chatUser?.name}</div>
-            <div className="flex gap-4">
-              <Button onClick={async () => {
-                setIsRinging(false);
-                if (ringtoneAudio) { ringtoneAudio.pause(); ringtoneAudio.currentTime = 0; }
-                if (call) {
-                  const hasPerm = await requestMediaPermissions();
-                  if (hasPerm) await call.join();
-                }
-              }} className="bg-green-500 hover:bg-green-600">Accept</Button>
-              <Button onClick={handleEndCall} className="bg-red-500 hover:bg-red-600">Reject</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      
       {/* HEADER */}
       <div className="h-16 border-b border-zinc-800 flex items-center px-6 gap-3 shrink-0">
-        {/* Stream Video Call UI (modal) */}
-        {callActive && call && streamClient && (
-          <StreamTheme>
-            <StreamVideoProvider client={streamClient}>
-              <StreamCall call={call}>
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
-                  <div className="bg-white rounded-lg p-6 shadow-lg flex flex-col items-center">
-                    <CallControls onLeave={handleEndCall} />
-                  </div>
-                </div>
-              </StreamCall>
-            </StreamVideoProvider>
-          </StreamTheme>
-        )}
         <Avatar className="h-10 w-10">
           <AvatarImage src={chatUser.image ?? undefined} />
           <AvatarFallback>{chatUser.name?.charAt(0)}</AvatarFallback>
@@ -673,7 +593,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           <div className="text-xs text-zinc-500">Chat</div>
         </div>
         {/* Stream Call Button (right side, before close) */}
-        {streamClient && chatUser && (
+        {/* {streamClient && chatUser && (
           <Button
             variant="ghost"
             size="icon"
@@ -682,7 +602,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           >
             <Video className="h-5 w-5" />
           </Button>
-        )}
+        )} */}
         <Button
           variant="ghost"
           size="icon"
@@ -703,113 +623,192 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
         {messages.map((msg) => {
           const isOwn = msg.senderId === currentUserId;
+          const showDropdown = isOwn;
+          const isText = !!msg.content && !msg.imageUrl && !msg.audioUrl && !msg.videoUrl && !msg.documentUrl;
           return (
             <div
               key={msg.id}
               className={`flex ${isOwn ? "justify-end" : "justify-start"}`}
             >
-              <div
-                className={`rounded-2xl max-w-xs overflow-hidden ${
-                  isOwn
-                    ? "bg-blue-600 text-white rounded-br-sm"
-                    : "bg-zinc-800 text-zinc-100 rounded-tl-sm"
-                }`}
-              >
-                {/* Image */}
-                {msg.imageUrl && (
-                  <div className="relative w-64 h-48">
-                    <Image
-                      src={msg.imageUrl}
-                      alt="Shared image"
-                      fill
-                      className="object-cover"
-                      sizes="256px"
-                    />
-                  </div>
-                )}
-                {/* Audio */}
-                {msg.audioUrl && (
-                  <div className="px-3 pt-3">
-                    <audio
-                      controls
-                      src={msg.audioUrl}
-                      className="h-8 max-w-55"
-                      style={{ filter: "invert(1)" }}
-                    />
-                  </div>
-                )}
-                {/* Video */}
-                {msg.videoUrl && (
-                  <div className="relative w-64">
-                    <video
-                      src={msg.videoUrl}
-                      controls
-                      className="w-full rounded-t-sm"
-                      preload="metadata"
-                    />
-                  </div>
-                )}
-                {/* Document */}
-                {msg.documentUrl && (
-                  <div
-                    className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${
-                      isOwn ? "hover:bg-blue-700/50" : "hover:bg-zinc-700/50"
-                    } transition`}
-                    onClick={async () => {
-                      try {
-                        const res = await fetch(msg.documentUrl!);
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = msg.documentName || "document";
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
-                      } catch (err) {
-                        console.error("Download failed:", err);
-                        window.open(msg.documentUrl!, "_blank");
-                      }
-                    }}
-                  >
-                    <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${
-                      isOwn ? "bg-blue-500/30" : "bg-zinc-600/50"
-                    }`}>
-                      <FileText className="h-5 w-5" />
+              <div className="relative group">
+                <div
+                  className={`rounded-2xl max-w-xs overflow-hidden ${
+                    isOwn
+                      ? "bg-blue-600 text-white rounded-br-sm"
+                      : "bg-zinc-800 text-zinc-100 rounded-tl-sm"
+                  }`}
+                >
+                  {/* Image */}
+                  {msg.imageUrl && (
+                    <div className="relative w-64 h-48">
+                      <Image
+                        src={msg.imageUrl}
+                        alt="Shared image"
+                        fill
+                        className="object-cover"
+                        sizes="256px"
+                      />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {msg.documentName || "Document"}
-                      </p>
-                      <p className={`text-[11px] ${
-                        isOwn ? "text-blue-200" : "text-zinc-400"
-                      }`}>Document</p>
-                    </div>
-                    <Download className="h-4 w-4 shrink-0 opacity-60" />
-                  </div>
-                )}
-                {/* Text + Time */}
-                <div className="px-4 py-2">
-                  {msg.content && (
-                    <p className="text-sm wrap-break-word">{msg.content}</p>
                   )}
-                  <p
-                    className={`text-[10px] mt-1 ${isOwn ? "text-blue-200" : "text-zinc-500"}`}
-                  >
-                    {new Date(msg.createdAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
+                  {/* Audio */}
+                  {msg.audioUrl && (
+                    <div className="px-3 pt-3">
+                      <audio
+                        controls
+                        src={msg.audioUrl}
+                        className="h-8 max-w-55"
+                        style={{ filter: "invert(1)" }}
+                      />
+                    </div>
+                  )}
+                  {/* Video */}
+                  {msg.videoUrl && (
+                    <div className="relative w-64">
+                      <video
+                        src={msg.videoUrl}
+                        controls
+                        className="w-full rounded-t-sm"
+                        preload="metadata"
+                      />
+                    </div>
+                  )}
+                  {/* Document */}
+                  {msg.documentUrl && (
+                    <div
+                      className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${
+                        isOwn ? "hover:bg-blue-700/50" : "hover:bg-zinc-700/50"
+                      } transition`}
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(msg.documentUrl!);
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = msg.documentName || "document";
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          URL.revokeObjectURL(url);
+                        } catch (err) {
+                          console.error("Download failed:", err);
+                          window.open(msg.documentUrl!, "_blank");
+                        }
+                      }}
+                    >
+                      <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${
+                        isOwn ? "bg-blue-500/30" : "bg-zinc-600/50"
+                      }`}>
+                        <FileText className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {msg.documentName || "Document"}
+                        </p>
+                        <p className={`text-[11px] ${
+                          isOwn ? "text-blue-200" : "text-zinc-400"
+                        }`}>Document</p>
+                      </div>
+                      <Download className="h-4 w-4 shrink-0 opacity-60" />
+                    </div>
+                  )}
+                  {/* Text + Time + Dropdown */}
+                  <div className="px-4 py-2 flex items-end gap-1">
+                    {/* Message text */}
+                    <div className="flex-1 min-w-0">
+                      {msg.content && (
+                        <p className="text-sm wrap-break-word">{msg.content}</p>
+                      )}
+                      <p
+                        className={`text-[10px] mt-1 ${isOwn ? "text-blue-200" : "text-zinc-500"}`}
+                      >
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    {/* Dropdown menu for own messages */}
+                    {showDropdown && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="p-0.5 h-5 w-5 text-white/60 hover:text-white">
+                            <span className="sr-only">Message options</span>
+                            {/* Vertical ellipsis icon */}
+                            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+                              <circle cy="4" cx="10" r="1.2"/>
+                              <circle cy="10" cx="10" r="1.2"/>
+                              <circle cy="16" cx="10" r="1.2"/>
+                            </svg>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align={isOwn ? "end" : "start"} side={isOwn ? "right" : "left"}>
+                          {isText && (
+                            <DropdownMenuItem onSelect={() => {
+                              setEditMsgId(msg.id);
+                              setEditMsgValue(msg.content);
+                            }}>
+                              Edit
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem variant="destructive" onSelect={() => setDeleteMsgId(msg.id)}>
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           );
         })}
 
-        <div ref={bottomRef} />
-      </div>
+        {/* Edit dialog for text messages */}
+        <Dialog open={!!editMsgId} onOpenChange={open => { if (!open) setEditMsgId(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Message</DialogTitle>
+              <DialogDescription>Edit your message and save changes.</DialogDescription>
+            </DialogHeader>
+            <Input
+              value={editMsgValue}
+              onChange={e => setEditMsgValue(e.target.value)}
+              disabled={editLoading}
+              autoFocus
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) handleEditSubmit(); }}
+            />
+            <DialogFooter>
+              <Button onClick={() => setEditMsgId(null)} variant="outline">Cancel</Button>
+              <Button onClick={handleEditSubmit} disabled={editLoading || !editMsgValue.trim()}>
+                {editLoading ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete alert dialog for all message types */}
+        <AlertDialog open={!!deleteMsgId} onOpenChange={open => { if (!open) setDeleteMsgId(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Message?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This action cannot be undone. The message will be permanently deleted.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <Button onClick={handleDeleteSubmit} disabled={deleteLoading} variant="destructive">
+                  {deleteLoading ? "Deleting..." : "Delete"}
+                </Button>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+    </AlertDialog>
+
+    <div ref={bottomRef} />
+  </div>
 
       {/* IMAGE PREVIEW OVERLAY (WhatsApp-style) */}
       {imagePreview && (

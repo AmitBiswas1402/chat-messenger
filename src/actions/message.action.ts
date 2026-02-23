@@ -1,5 +1,31 @@
+
 "use server"
 
+
+// Edit a text message (content only)
+export async function editMessage(messageId: string, newContent: string) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+  // Only allow editing own messages
+  const [msg] = await db
+    .update(messages)
+    .set({ content: newContent })
+    .where(and(eq(messages.id, messageId), eq(messages.senderId, userId)))
+    .returning();
+  return msg;
+}
+
+// Delete any message (soft delete could be added, but here it's hard delete)
+export async function deleteMessage(messageId: string) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+  // Only allow deleting own messages
+  const [msg] = await db
+    .delete(messages)
+    .where(and(eq(messages.id, messageId), eq(messages.senderId, userId)))
+    .returning();
+  return msg;
+}
 import { db } from "@/index"
 import { messages } from "@/db/schema"
 import { and, eq, or, asc } from "drizzle-orm"
@@ -64,18 +90,16 @@ export async function uploadImage(formData: FormData): Promise<string> {
   const buffer = Buffer.from(bytes)
 
   const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(
-        {
-          folder: "messenger",
-          resource_type: "image",
-        },
-        (error, result) => {
-          if (error || !result) reject(error ?? new Error("Upload failed"))
-          else resolve(result)
-        }
-      )
-      .end(buffer)
+    cloudinary.uploader.upload_stream(
+      {
+        folder: "messenger",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error || !result) reject(error ?? new Error("Upload failed"))
+        else resolve(result as { secure_url: string })
+      }
+    ).end(buffer)
   })
 
   return result.secure_url
@@ -92,18 +116,16 @@ export async function uploadAudio(formData: FormData): Promise<string> {
   const buffer = Buffer.from(bytes)
 
   const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(
-        {
-          folder: "messenger/audio",
-          resource_type: "video", // Cloudinary uses "video" for audio files
-        },
-        (error, result) => {
-          if (error || !result) reject(error ?? new Error("Upload failed"))
-          else resolve(result)
-        }
-      )
-      .end(buffer)
+    cloudinary.uploader.upload_stream(
+      {
+        folder: "messenger/audio",
+        resource_type: "video", // Cloudinary uses "video" for audio files
+      },
+      (error, result) => {
+        if (error || !result) reject(error ?? new Error("Upload failed"))
+        else resolve(result as { secure_url: string })
+      }
+    ).end(buffer)
   })
 
   return result.secure_url
@@ -120,18 +142,16 @@ export async function uploadVideo(formData: FormData): Promise<string> {
   const buffer = Buffer.from(bytes)
 
   const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(
-        {
-          folder: "messenger/videos",
-          resource_type: "video",
-        },
-        (error, result) => {
-          if (error || !result) reject(error ?? new Error("Upload failed"))
-          else resolve(result)
-        }
-      )
-      .end(buffer)
+    cloudinary.uploader.upload_stream(
+      {
+        folder: "messenger/videos",
+        resource_type: "video",
+      },
+      (error, result) => {
+        if (error || !result) reject(error ?? new Error("Upload failed"))
+        else resolve(result as { secure_url: string })
+      }
+    ).end(buffer)
   })
 
   return result.secure_url
@@ -148,20 +168,18 @@ export async function uploadDocument(formData: FormData): Promise<string> {
   const buffer = Buffer.from(bytes)
 
   const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    cloudinary.uploader
-      .upload_stream(
-        {
-          folder: "messenger/documents",
-          resource_type: "raw",
-          use_filename: true,
-          unique_filename: true,
-        },
-        (error, result) => {
-          if (error || !result) reject(error ?? new Error("Upload failed"))
-          else resolve(result)
-        }
-      )
-      .end(buffer)
+    cloudinary.uploader.upload_stream(
+      {
+        folder: "messenger/documents",
+        resource_type: "raw",
+        use_filename: true,
+        unique_filename: true,
+      },
+      (error, result) => {
+        if (error || !result) reject(error ?? new Error("Upload failed"))
+        else resolve(result as { secure_url: string })
+      }
+    ).end(buffer)
   })
 
   return result.secure_url
