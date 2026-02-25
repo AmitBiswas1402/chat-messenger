@@ -10,6 +10,7 @@ interface User {
   id: string;
   name: string | null;
   imageUrl: string | null;
+  lastMessage?: "sending" | "sent" | "delivered" | "seen" | null;
 }
 
 export default function UserList({ users }: { users: User[] }) {
@@ -61,7 +62,26 @@ export default function UserList({ users }: { users: User[] }) {
             <AvatarFallback>{user.name?.charAt(0) ?? "U"}</AvatarFallback>
           </Avatar>
 
-          <span className="text-sm font-medium">{user.name}</span>
+          <span className="text-sm font-medium flex items-center">
+            {user.name}
+            {/* Status tick icon */}
+            {user.lastMessage && (
+              <span className="ml-2">
+                {user.lastMessage === "sending" && (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
+                )}
+                {user.lastMessage === "sent" && (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/><path d="M6 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
+                )}
+                {user.lastMessage === "delivered" && (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/><path d="M6 8l3 3 5-5" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/></svg>
+                )}
+                {user.lastMessage === "seen" && (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8l3 3 5-5" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/><path d="M6 8l3 3 5-5" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round"/></svg>
+                )}
+              </span>
+            )}
+          </span>
         </Link>
       ))}
     </div>

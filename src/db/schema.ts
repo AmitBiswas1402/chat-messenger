@@ -32,4 +32,8 @@ export const messages = pgTable("messages", {
   documentName: varchar("document_name", { length: 512 }),
   videoUrl: varchar("video_url", { length: 1024 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+    // Message status fields
+    status: varchar("status", { length: 20 }).default("sending").notNull(), // "sending" | "sent" | "delivered" | "seen"
+    seenAt: timestamp("seen_at"),
+    deliveredAt: timestamp("delivered_at"),
+  });

@@ -48,6 +48,9 @@ interface Message {
   documentName?: string | null;
   videoUrl?: string | null;
   createdAt: Date;
+  status: "sending" | "sent" | "delivered" | "seen";
+  seenAt?: Date | null;
+  deliveredAt?: Date | null;
 }
 
 interface Props {
@@ -166,7 +169,13 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
     if (!chatId) return;
     getMessages(chatId).then((msgs) => {
       setMessages(
-        msgs.map((m) => ({ ...m, createdAt: new Date(m.createdAt) })),
+        msgs.map((m) => ({
+          ...m,
+          createdAt: new Date(m.createdAt),
+          status: (m.status === "sending" || m.status === "sent" || m.status === "delivered" || m.status === "seen") ? m.status : "sending",
+          seenAt: m.seenAt ? new Date(m.seenAt) : null,
+          deliveredAt: m.deliveredAt ? new Date(m.deliveredAt) : null,
+        }))
       );
     });
   }, [chatId]);
@@ -181,7 +190,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
       if (isRelevant) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+          return [
+            ...prev,
+            {
+              ...msg,
+              createdAt: new Date(msg.createdAt),
+              status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+              seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+              deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+            },
+          ];
         });
       }
     };
@@ -244,7 +262,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+        return [
+          ...prev,
+          {
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+            seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+            deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+          },
+        ];
       });
 
       cancelImagePreview();
@@ -273,7 +300,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+        return [
+          ...prev,
+          {
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+            seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+            deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+          },
+        ];
       });
     } catch (err) {
       console.error("Failed to send message:", err);
@@ -337,7 +373,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+        return [
+          ...prev,
+          {
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+            seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+            deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+          },
+        ];
       });
 
       cancelDocPreview();
@@ -426,7 +471,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+        return [
+          ...prev,
+          {
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+            seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+            deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+          },
+        ];
       });
 
       cancelVideoPreview();
@@ -518,7 +572,16 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        return [...prev, { ...msg, createdAt: new Date(msg.createdAt) }];
+        return [
+          ...prev,
+          {
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            status: (msg.status === "sending" || msg.status === "sent" || msg.status === "delivered" || msg.status === "seen") ? msg.status : "sending",
+            seenAt: msg.seenAt ? new Date(msg.seenAt) : null,
+            deliveredAt: msg.deliveredAt ? new Date(msg.deliveredAt) : null,
+          },
+        ];
       });
 
       setAudioBlob(null);
@@ -625,6 +688,43 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           const isOwn = msg.senderId === currentUserId;
           const showDropdown = isOwn;
           const isText = !!msg.content && !msg.imageUrl && !msg.audioUrl && !msg.videoUrl && !msg.documentUrl;
+          // Message tick icon logic
+          let tickIcon = null;
+          if (isOwn) {
+            if (msg.status === "delivered") {
+              tickIcon = (
+                <span title="Delivered" className="ml-1 text-zinc-400">
+                  {/* Single grey tick */}
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
+                </span>
+              );
+            } else if (msg.status === "sent") {
+              tickIcon = (
+                <span title="Received" className="ml-1 text-zinc-400">
+                  {/* Double grey tick */}
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/><path d="M6 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
+                </span>
+              );
+            } else if (msg.status === "seen") {
+              tickIcon = (
+                <span title="Seen" className="ml-1 text-zinc-400">
+                  {/* Triple grey tick */}
+                  <svg width="24" height="16" viewBox="0 0 24 16" fill="none">
+                    <path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M6 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
+                    <path d="M10 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
+                  </svg>
+                </span>
+              );
+            }
+          }
+          // Unread indicator for received messages
+          let unreadIndicator = null;
+          if (!isOwn && msg.status !== "seen") {
+            unreadIndicator = (
+              <span className="ml-1 inline-block w-2 h-2 rounded-full bg-blue-500" title="Unread"></span>
+            );
+          }
           return (
             <div
               key={msg.id}
@@ -726,6 +826,10 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
+                        {/* Message tick icon */}
+                        {tickIcon}
+                        {/* Unread indicator */}
+                        {unreadIndicator}
                       </p>
                     </div>
                     {/* Dropdown menu for own messages */}

@@ -10,6 +10,7 @@ export default async function Sidebar() {
   const currentUserId = await getDBUserId()
   if (!currentUserId) return null
 
+  // Fetch users only (no lastMessage, since db.raw is not supported)
   const otherUsers = await db
     .select({
       id: users.id,
@@ -30,8 +31,8 @@ export default async function Sidebar() {
       <Separator />
 
       {/* USERS */}
-      <div className="flex-1 overflow-y-auto">
-        <UserList users={otherUsers} />
+        <div className="flex-1 overflow-y-auto">
+          <UserList users={otherUsers} />
       </div>
 
       <Separator />
