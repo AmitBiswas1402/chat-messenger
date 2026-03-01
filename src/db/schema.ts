@@ -33,7 +33,7 @@ export const messages = pgTable("messages", {
   videoUrl: varchar("video_url", { length: 1024 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
     // Message status fields
-    status: varchar("status", { length: 20 }).default("sending").notNull(), // "sending" | "sent" | "delivered" | "seen"
+    status: varchar("status", { length: 20 }).default("sent").notNull(), // "sent" | "delivered" | "seen"
     seenAt: timestamp("seen_at"),
     deliveredAt: timestamp("delivered_at"),
   });

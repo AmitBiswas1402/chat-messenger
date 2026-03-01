@@ -11,6 +11,7 @@ import {
   uploadImage,
   uploadAudio,
   uploadDocument,
+  markMessagesSeen,
 } from "@/actions/message.action";
 import {
   AlertDialog,
@@ -92,6 +93,10 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
 
   // Sending state
   const [sending, setSending] = useState(false);
+
+  // Typing indicator state
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
 
 
@@ -201,6 +206,17 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
             },
           ];
         });
+
+        // Auto-mark incoming messages as seen only if tab is focused
+        if (msg.senderId === chatId && currentUserId) {
+          if (document.visibilityState === "visible" && document.hasFocus()) {
+            markMessagesSeen(chatId).then((count) => {
+              if (count > 0) {
+                socket?.emit("message:seen", { to: chatId, from: currentUserId });
+              }
+            });
+          }
+        }
       }
     };
     socket.on("new-message", handler);
@@ -213,6 +229,101 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Mark messages as seen when chat opens or tab becomes visible/focused
+  // Only marks seen + emits when the tab is actually visible and focused
+  useEffect(() => {
+    if (!chatId || !currentUserId || !socket) return;
+
+    const markSeen = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        markMessagesSeen(chatId).then((count) => {
+          if (count > 0) {
+            socket.emit("message:seen", { to: chatId, from: currentUserId });
+          }
+        });
+      }
+    };
+
+    // Mark seen on mount if tab is focused
+    markSeen();
+
+    // Mark seen when tab becomes visible or window gets focus
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") markSeen();
+    };
+    const handleFocus = () => markSeen();
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [chatId, currentUserId, socket]);
+
+  // Listen for message status updates (delivered/seen)
+  // Only upgrades status, never downgrades: sent → delivered → seen
+  useEffect(() => {
+    if (!socket || !chatId) return;
+    const statusPriority: Record<string, number> = { sending: 0, sent: 1, delivered: 2, seen: 3 };
+    const statusHandler = (data: { from: string; status: "delivered" | "seen" }) => {
+      if (data.from === chatId) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.senderId === currentUserId && m.receiverId === chatId) {
+              const current = statusPriority[m.status] ?? 0;
+              const incoming = statusPriority[data.status] ?? 0;
+              if (incoming > current) {
+                return { ...m, status: data.status };
+              }
+            }
+            return m;
+          })
+        );
+      }
+    };
+    socket.on("message:status-update", statusHandler);
+    return () => { socket.off("message:status-update", statusHandler); };
+  }, [socket, chatId, currentUserId]);
+
+  // Typing indicator listeners
+  useEffect(() => {
+    if (!socket || !chatId) return;
+    const typingHandler = (data: { from: string }) => {
+      if (data.from === chatId) setIsTyping(true);
+    };
+    const stopTypingHandler = (data: { from: string }) => {
+      if (data.from === chatId) setIsTyping(false);
+    };
+    socket.on("typing", typingHandler);
+    socket.on("stop-typing", stopTypingHandler);
+    return () => {
+      socket.off("typing", typingHandler);
+      socket.off("stop-typing", stopTypingHandler);
+    };
+  }, [socket, chatId]);
+
+  // Listen for edited messages from the other user
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (data: { id: string; content: string }) => {
+      setMessages((prev) => prev.map((m) => (m.id === data.id ? { ...m, content: data.content } : m)));
+    };
+    socket.on("message:edited", handler);
+    return () => { socket.off("message:edited", handler); };
+  }, [socket]);
+
+  // Listen for deleted messages from the other user
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (data: { id: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== data.id));
+    };
+    socket.on("message:deleted", handler);
+    return () => { socket.off("message:deleted", handler); };
+  }, [socket]);
 
   if (!chatId || !chatUser) {
     return (
@@ -323,6 +434,17 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  // Typing emit with debounce
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+    if (!socket || !chatId || !currentUserId) return;
+    socket.emit("typing", { to: chatId, from: currentUserId });
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit("stop-typing", { to: chatId, from: currentUserId });
+    }, 500);
   };
 
   const handlePreviewKeyDown = (e: React.KeyboardEvent) => {
@@ -612,7 +734,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
       });
       if (!res.ok) throw new Error("Failed to edit message");
       setMessages(prev => prev.map(m => m.id === editMsgId ? { ...m, content: editMsgValue.trim() } : m));
-      socket?.emit("edit-message", { id: editMsgId, content: editMsgValue.trim() });
+      socket?.emit("edit-message", { id: editMsgId, content: editMsgValue.trim(), receiverId: chatId });
       setEditMsgId(null);
     } catch (err) {
       alert("Failed to edit message");
@@ -633,7 +755,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
       });
       if (!res.ok) throw new Error("Failed to delete message");
       setMessages(prev => prev.filter(m => m.id !== deleteMsgId));
-      socket?.emit("delete-message", { id: deleteMsgId });
+      socket?.emit("delete-message", { id: deleteMsgId, receiverId: chatId });
       setDeleteMsgId(null);
     } catch (err) {
       alert("Failed to delete message");
@@ -653,7 +775,13 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
         </Avatar>
         <div className="flex-1">
           <div className="font-medium">{chatUser.name}</div>
-          <div className="text-xs text-zinc-500">Chat</div>
+          <div className="text-xs text-zinc-500">
+            {isTyping ? (
+              <span className="text-emerald-400 italic">typing...</span>
+            ) : (
+              "Chat"
+            )}
+          </div>
         </div>
         {/* Stream Call Button (right side, before close) */}
         {/* {streamClient && chatUser && (
@@ -688,42 +816,39 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           const isOwn = msg.senderId === currentUserId;
           const showDropdown = isOwn;
           const isText = !!msg.content && !msg.imageUrl && !msg.audioUrl && !msg.videoUrl && !msg.documentUrl;
-          // Message tick icon logic
+          // Message tick icon logic (WhatsApp-style)
           let tickIcon = null;
           if (isOwn) {
-            if (msg.status === "delivered") {
+            if (msg.status === "seen") {
               tickIcon = (
-                <span title="Delivered" className="ml-1 text-zinc-400">
-                  {/* Single grey tick */}
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
+                <span title="Seen" className="ml-1 inline-flex">
+                  {/* Double blue tick */}
+                  <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+                    <path d="M1.5 6l3 3L11 2.5" stroke="#3b82f6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                    <path d="M5.5 6l3 3L15 2.5" stroke="#3b82f6" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                  </svg>
+                </span>
+              );
+            } else if (msg.status === "delivered") {
+              tickIcon = (
+                <span title="Delivered" className="ml-1 inline-flex">
+                  {/* Double grey tick */}
+                  <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+                    <path d="M1.5 6l3 3L11 2.5" stroke="#888" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                    <path d="M5.5 6l3 3L15 2.5" stroke="#888" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                  </svg>
                 </span>
               );
             } else if (msg.status === "sent") {
               tickIcon = (
-                <span title="Received" className="ml-1 text-zinc-400">
-                  {/* Double grey tick */}
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/><path d="M6 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/></svg>
-                </span>
-              );
-            } else if (msg.status === "seen") {
-              tickIcon = (
-                <span title="Seen" className="ml-1 text-zinc-400">
-                  {/* Triple grey tick */}
-                  <svg width="24" height="16" viewBox="0 0 24 16" fill="none">
-                    <path d="M2 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M6 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
-                    <path d="M10 8l3 3 5-5" stroke="#888" strokeWidth="2" strokeLinecap="round"/>
+                <span title="Sent" className="ml-1 inline-flex">
+                  {/* Single grey tick */}
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M2 6l3 3L10 3" stroke="#888" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
                   </svg>
                 </span>
               );
             }
-          }
-          // Unread indicator for received messages
-          let unreadIndicator = null;
-          if (!isOwn && msg.status !== "seen") {
-            unreadIndicator = (
-              <span className="ml-1 inline-block w-2 h-2 rounded-full bg-blue-500" title="Unread"></span>
-            );
           }
           return (
             <div
@@ -734,7 +859,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                 <div
                   className={`rounded-2xl max-w-xs overflow-hidden ${
                     isOwn
-                      ? "bg-blue-600 text-white rounded-br-sm"
+                      ? "bg-emerald-900 text-white rounded-br-sm"
                       : "bg-zinc-800 text-zinc-100 rounded-tl-sm"
                   }`}
                 >
@@ -776,7 +901,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                   {msg.documentUrl && (
                     <div
                       className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${
-                        isOwn ? "hover:bg-blue-700/50" : "hover:bg-zinc-700/50"
+                        isOwn ? "hover:bg-emerald-800/50" : "hover:bg-zinc-700/50"
                       } transition`}
                       onClick={async () => {
                         try {
@@ -797,7 +922,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                       }}
                     >
                       <div className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${
-                        isOwn ? "bg-blue-500/30" : "bg-zinc-600/50"
+                        isOwn ? "bg-emerald-600/30" : "bg-zinc-600/50"
                       }`}>
                         <FileText className="h-5 w-5" />
                       </div>
@@ -806,7 +931,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                           {msg.documentName || "Document"}
                         </p>
                         <p className={`text-[11px] ${
-                          isOwn ? "text-blue-200" : "text-zinc-400"
+                          isOwn ? "text-emerald-300" : "text-zinc-400"
                         }`}>Document</p>
                       </div>
                       <Download className="h-4 w-4 shrink-0 opacity-60" />
@@ -820,7 +945,8 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                         <p className="text-sm wrap-break-word">{msg.content}</p>
                       )}
                       <p
-                        className={`text-[10px] mt-1 ${isOwn ? "text-blue-200" : "text-zinc-500"}`}
+                        className={`text-[10px] mt-1 ${isOwn ? "text-emerald-300" : "text-zinc-500"}`}
+                        suppressHydrationWarning
                       >
                         {new Date(msg.createdAt).toLocaleTimeString([], {
                           hour: "2-digit",
@@ -828,8 +954,6 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
                         })}
                         {/* Message tick icon */}
                         {tickIcon}
-                        {/* Unread indicator */}
-                        {unreadIndicator}
                       </p>
                     </div>
                     {/* Dropdown menu for own messages */}
@@ -1325,7 +1449,7 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
           <Input
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
             className="flex-1 bg-zinc-800 border-zinc-700 rounded-full px-4 py-2"

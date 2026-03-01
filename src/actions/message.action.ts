@@ -28,7 +28,7 @@ export async function deleteMessage(messageId: string) {
 }
 import { db } from "@/index"
 import { messages } from "@/db/schema"
-import { and, eq, or, asc } from "drizzle-orm"
+import { and, eq, or, asc, desc, ne, count } from "drizzle-orm"
 import { auth } from "@clerk/nextjs/server"
 import cloudinary from "@/lib/cloudinary"
 
@@ -183,4 +183,141 @@ export async function uploadDocument(formData: FormData): Promise<string> {
   })
 
   return result.secure_url
+}
+
+// Mark all messages from a specific sender to the current user as seen
+// Returns the number of messages actually marked
+export async function markMessagesSeen(senderId: string): Promise<number> {
+  const { userId } = await auth()
+  if (!userId) return 0
+
+  const updated = await db
+    .update(messages)
+    .set({ status: "seen", seenAt: new Date() })
+    .where(
+      and(
+        eq(messages.senderId, senderId),
+        eq(messages.receiverId, userId),
+        or(
+          eq(messages.status, "sent"),
+          eq(messages.status, "delivered")
+        )
+      )
+    )
+    .returning({ id: messages.id })
+
+  return updated.length
+}
+
+// Mark all undelivered messages addressed to the current user as delivered
+// Returns the distinct sender IDs so we can notify them via socket
+export async function markAllMessagesDelivered() {
+  const { userId } = await auth()
+  if (!userId) return []
+
+  const updated = await db
+    .update(messages)
+    .set({ status: "delivered", deliveredAt: new Date() })
+    .where(
+      and(
+        eq(messages.receiverId, userId),
+        eq(messages.status, "sent")
+      )
+    )
+    .returning({ senderId: messages.senderId })
+
+  const senderIds = [...new Set(updated.map((r) => r.senderId))]
+  return senderIds
+}
+
+// Mark messages from a specific sender to the current user as delivered
+export async function markMessageDelivered(senderId: string) {
+  const { userId } = await auth()
+  if (!userId) return
+
+  await db
+    .update(messages)
+    .set({ status: "delivered", deliveredAt: new Date() })
+    .where(
+      and(
+        eq(messages.senderId, senderId),
+        eq(messages.receiverId, userId),
+        eq(messages.status, "sent")
+      )
+    )
+}
+
+// Get the last message for each conversation the current user is part of
+export async function getLastMessagePerUser() {
+  const { userId } = await auth()
+  if (!userId) return []
+
+  const allMessages = await db
+    .select()
+    .from(messages)
+    .where(
+      or(
+        eq(messages.senderId, userId),
+        eq(messages.receiverId, userId)
+      )
+    )
+    .orderBy(desc(messages.createdAt))
+
+  const seen = new Set<string>()
+  const result: Array<{
+    otherUserId: string
+    content: string
+    senderId: string
+    createdAt: string
+    status: string
+    imageUrl: string | null
+    audioUrl: string | null
+    videoUrl: string | null
+    documentUrl: string | null
+  }> = []
+
+  for (const msg of allMessages) {
+    const otherUserId = msg.senderId === userId ? msg.receiverId : msg.senderId
+    if (seen.has(otherUserId)) continue
+    seen.add(otherUserId)
+    result.push({
+      otherUserId,
+      content: msg.content,
+      senderId: msg.senderId,
+      createdAt: msg.createdAt.toISOString(),
+      status: msg.status,
+      imageUrl: msg.imageUrl,
+      audioUrl: msg.audioUrl,
+      videoUrl: msg.videoUrl,
+      documentUrl: msg.documentUrl,
+    })
+  }
+
+  return result
+}
+
+// Get count of unread (not "seen") messages per sender for the current user
+export async function getUnreadCounts() {
+  const { userId } = await auth()
+  if (!userId) return {}
+
+  const rows = await db
+    .select({
+      senderId: messages.senderId,
+      unread: count(),
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.receiverId, userId),
+        ne(messages.status, "seen")
+      )
+    )
+    .groupBy(messages.senderId)
+
+  const counts: Record<string, number> = {}
+  for (const row of rows) {
+    counts[row.senderId] = row.unread
+  }
+  return counts
 }
