@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useCallStore } from "@/store/useCallStore";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,35 @@ interface IncomingCallModalProps {
 
 export function IncomingCallModal({ onAccept, onDecline }: IncomingCallModalProps) {
   const { callerName, callerAvatar } = useCallStore();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Play ringtone when modal mounts, stop on unmount
+  useEffect(() => {
+    const audio = new Audio("/ringtone.mp3");
+    audio.loop = true;
+    audio.volume = 1.0;
+    audioRef.current = audio;
+
+    audio.play().catch((err) => {
+      console.warn("[IncomingCallModal] Could not play ringtone:", err);
+    });
+
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+      audioRef.current = null;
+    };
+  }, []);
+
+  const handleAccept = () => {
+    audioRef.current?.pause();
+    onAccept();
+  };
+
+  const handleDecline = () => {
+    audioRef.current?.pause();
+    onDecline();
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center">
@@ -39,7 +69,7 @@ export function IncomingCallModal({ onAccept, onDecline }: IncomingCallModalProp
         {/* Decline */}
         <div className="flex flex-col items-center gap-2">
           <Button
-            onClick={onDecline}
+            onClick={handleDecline}
             variant="destructive"
             size="lg"
             className="rounded-full h-16 w-16 p-0 bg-red-600 hover:bg-red-700"
@@ -52,7 +82,7 @@ export function IncomingCallModal({ onAccept, onDecline }: IncomingCallModalProp
         {/* Accept */}
         <div className="flex flex-col items-center gap-2">
           <Button
-            onClick={onAccept}
+            onClick={handleAccept}
             size="lg"
             className="rounded-full h-16 w-16 p-0 bg-green-600 hover:bg-green-700"
           >

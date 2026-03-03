@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -47,6 +47,8 @@ export default function UserList({
 }: Props) {
   const socket = useSocket();
   const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const [query, setQuery] = useState("");
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [lastMessages, setLastMessages] = useState<Record<string, LastMessage>>(
@@ -59,7 +61,17 @@ export default function UserList({
     }
   );
   const [unreadCounts, setUnreadCounts] =
-    useState<Record<string, number>>(initialUnreadCounts);
+    useState<Record<string, number>>(() => {
+      // Don't show badge for the chat that's currently open
+      const activeChatId = pathname?.startsWith("/chat/")
+        ? pathname.split("/chat/")[1]
+        : null;
+      if (activeChatId && initialUnreadCounts[activeChatId]) {
+        const { [activeChatId]: _, ...rest } = initialUnreadCounts;
+        return rest;
+      }
+      return initialUnreadCounts;
+    });
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
 
   // Mark all pending messages as delivered on connect/reconnect
@@ -75,6 +87,15 @@ export default function UserList({
             map[m.otherUserId] = m;
           });
           setLastMessages(map);
+
+          // Exclude the currently active chat — those messages are already seen
+          const activeChatId = pathnameRef.current?.startsWith("/chat/")
+            ? pathnameRef.current.split("/chat/")[1]
+            : null;
+          if (activeChatId) {
+            delete freshCounts[activeChatId];
+          }
+
           setUnreadCounts(freshCounts);
         })
         .catch((e) => console.error("Failed to refresh sidebar:", e));
