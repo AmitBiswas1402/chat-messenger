@@ -27,12 +27,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Send, Smile, ImagePlus, X, Mic, Square, Trash2, FileText, Download, Video } from "lucide-react";
+import { Send, Smile, ImagePlus, X, Mic, Square, Trash2, FileText, Download, Video, Phone } from "lucide-react";
 import data from "@emoji-mart/data";
 import Picker from "@emoji-mart/react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useCallStore } from "@/store/useCallStore";
 
 
 
@@ -783,17 +784,27 @@ const ChatArea = ({ chatId, currentUserId, chatUser }: Props) => {
             )}
           </div>
         </div>
-        {/* Stream Call Button (right side, before close) */}
-        {/* {streamClient && chatUser && (
+        {/* Voice Call Button */}
+        {chatUser && currentUserId && chatId && (
           <Button
             variant="ghost"
             size="icon"
-            className="text-green-500 hover:text-green-700"
-            onClick={handleStartCall}
+            className="text-green-500 hover:text-green-600"
+            onClick={() => {
+              const { callStatus, startOutgoingCall } = useCallStore.getState();
+              if (callStatus !== "idle") return;
+              startOutgoingCall(currentUserId, chatId, chatUser.name, chatUser.image ?? null);
+              socket?.emit("call", {
+                to: chatId,
+                from: currentUserId,
+                name: chatUser.name,
+                avatar: chatUser.image ?? null,
+              });
+            }}
           >
-            <Video className="h-5 w-5" />
+            <Phone className="h-5 w-5" />
           </Button>
-        )} */}
+        )}
         <Button
           variant="ghost"
           size="icon"

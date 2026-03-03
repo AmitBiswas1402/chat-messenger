@@ -102,6 +102,10 @@ io.on("connection", (socket) => {
     io.to(data.to).emit("signal", { from: data.from, signal: data.signal });
   });
 
+  socket.on("call-end", (data) => {
+    io.to(data.to).emit("call-ended", { from: data.from });
+  });
+
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id)
 
